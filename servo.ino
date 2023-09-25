@@ -18,15 +18,14 @@
 #define WIRE Wire
 
 Adafruit_PWMServoDriver pwms[CONTROLLER_COUNT];
-int servo_count;
-int switch_count;
 unsigned long previous_time;
 
 
 struct SwitchData {
-  int pin;
-  int servo;
-  bool turnOn;
+  int pin;      // the pin the switch is on
+  int servo;    // Number of the sefvo in the list servo_configs below
+                // Note that they count from zero!
+  bool turnOn;  // If true, will set the servo to the "on" position
 };
 
 SwitchData switches[] = {
@@ -43,45 +42,92 @@ SwitchData switches[] = {
 };
 
 
-struct ServoData {
+
+
+
+class Servo {
   int cluster;  // 0 - 5 or so
   int number; // 0 - 15
-  int off_angle;   // all angles in hundredths of a degree
-  int on_angle;    // use ints to make comparsons easier
-  int current_angle;
-  int target_angle;
   int speed;
+  int target_angle;
+  int current_angle;
+  int off_angle;
+  int on_angle;
+
+  public:
+	Servo(int _cluster, int _number, int _speed, int _off_angle, int _on_angle) {
+    cluster = _cluster;
+    number = _number;
+    speed = _speed;
+    off_angle = _off_angle * 100;
+    target_angle = _off_angle * 100;
+    current_angle = _off_angle * 100;
+    on_angle = _on_angle * 100;
+  }
+
+  void set(bool turnOn) {
+    target_angle = turnOn ? on_angle : off_angle;
+  }
+
+  void adjust(int elapsed) {
+    int diff = current_angle - target_angle;
+    if (diff == 0) return;
+
+    int increment = elapsed * speed;
+    // diff is then capped at that
+    if (diff > 0) {
+      if (diff > speed) diff = increment;  // cap at speed
+      current_angle -= diff;
+    }
+    else {
+      if (diff < speed) diff = increment;  // cap at speed
+      current_angle += diff;
+    }
+    update();    
+  }
+
+  void update() {
+    int pulselen = current_angle * (SERVOMAX - SERVOMIN) / 18000 + SERVOMIN;
+    if (pulselen > SERVOMAX) {
+      Serial.print("ERROR: Too high!!!");
+      return;
+    }
+    if (pulselen < SERVOMIN) {
+      Serial.print("ERROR: Too low!!!");
+      return;
+    }
+    pwms[cluster].setPWM(number, 0, pulselen);
+  }
+
+  String status() {
+    return String(current_angle) + "/" + String(target_angle);
+  }
+
+  private:
 };
 
-ServoData servos[] = {
-  {0, 0, 0, 18000, 0, 18000, 1},
-  {0, 1, 1000, 12000, 12000, 1000, 3}, // this one does not like to go beyond 120deg!
-  {0, 3, 0, 9000, 9000, 0, 1},
-  {1, 1, 0, 18000, 0, 18000, 1},
-  {1, 2, 0, 18000, 0, 18000, 4},
-  {1, 3, 0, 9000, 0, 9000, 4},
+
+
+Servo servos[] = {
+  Servo(0, 0, 1, 0, 180),
+  Servo(0, 1, 3, 10, 120), // this one does not like to go beyond 120deg!
+  Servo(0, 3, 1, 0, 90),
+  Servo(1, 1, 1, 0, 180),
+  Servo(1, 2, 4, 0, 180),
+  Servo(1, 3, 4, 0, 90),
 };
 
 
-void setAngle(ServoData servo) {
-  int pulselen = servo.current_angle * (SERVOMAX - SERVOMIN) / 18000 + SERVOMIN;
-  if (pulselen > SERVOMAX) {
-    Serial.print("ERROR: Too high!!!");
-    return;
-  }
-  if (pulselen < SERVOMIN) {
-    Serial.print("ERROR: Too low!!!");
-    return;
-  }
-  pwms[servo.cluster].setPWM(servo.number, 0, pulselen);
-}
+
+
+const int servo_count = sizeof(servos)/sizeof(servos[0]);
+const int switch_count = sizeof(switches)/sizeof(switches[0]);
+
 
 
 
 
 void setup() {
-  servo_count = sizeof(servos)/sizeof(servos[0]);
-  switch_count = sizeof(switches)/sizeof(switches[0]);
 
   Serial.begin(9600);
 
@@ -94,6 +140,10 @@ void setup() {
     pwms[i].begin();
     pwms[i].setOscillatorFrequency(27000000);
     pwms[i].setPWMFreq(SERVO_FREQ);  // Analog servos run at ~50 Hz updates
+  }
+
+  for (int i = 0; i < servo_count; i++) {
+    servos[i].update();
   }
 
   delay(100);
@@ -110,46 +160,21 @@ void loop() {
   unsigned long now_time = millis();
   unsigned long elapsed = now_time - previous_time;
   previous_time = now_time;
+  int increment = TIME_FACTOR * elapsed;
 
 
   // HANDLE INPUTS
   for (int i = 0; i < switch_count; i++) {
     if (digitalRead(switches[i].pin) == LOW) {
-      ServoData servo = servos[switches[i].servo];
-      if (switches[i].turnOn) {
-        servos[switches[i].servo].target_angle = servo.on_angle;
-      }
-      else {
-        servos[switches[i].servo].target_angle = servo.off_angle;
-      }
-      Serial.println("servo_count:" + String(servo_count) + " (" + String(servos[5].target_angle) + ", " + String(servos[5].current_angle) + ")");
+      servos[switches[i].servo].set(switches[i].turnOn);
+      Serial.println("switch:" + String(i) + " (" + servos[5].status() + ")");
     }
   }
 
 
   // HANDLE SERVOS
   for (int i = 0; i < servo_count; i++) {
-    int diff = servos[i].current_angle - servos[i].target_angle;
-    if (diff == 0) {
-      //Serial.print(".");
-      continue;
-    }
-    // increment is how much the servo can change, given its speed and the elapsed time
-    // We are taking a float, a long and an int, and converting to an int, but hopefully okay!
-    // The calculation will be done as a float because it starts with a float, and converted on assignment
-    int increment = TIME_FACTOR * elapsed * servos[i].speed;
-    // diff is then capped at that
-    if (diff > 0) {
-      if (diff > servos[i].speed) diff = increment;  // cap at speed
-      servos[i].current_angle -= diff;
-      //Serial.print("-");
-    }
-    else {
-      if (diff < servos[i].speed) diff = increment;  // cap at speed
-      servos[i].current_angle += diff;
-      //Serial.print("+");
-    }
-    setAngle(servos[i]);
+    servos[i].adjust(increment);
   }
  
 }
