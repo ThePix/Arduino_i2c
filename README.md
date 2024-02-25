@@ -8,3 +8,5 @@ http://www.prestonanddistrictmrs.org.uk/articles/point-control-with-servos/codin
 Details on wiring, mounting servos, etc. here:
 
 http://www.prestonanddistrictmrs.org.uk/articles/point-control-with-servos/
+
+This project is now dead. I decided the arduino was just not fast enough for what I wanted, so moved to Raspberry Pi, with the added advantage of a GUI for trouble-shooting. See [here](https://github.com/ThePix/ServoMaster).
